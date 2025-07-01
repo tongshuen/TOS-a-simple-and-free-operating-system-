@@ -1,4 +1,4 @@
-/* kernel.c - 64位长模式内核 */
+/* kernel.c - TOS 的内核 */
 #define VIDEO_MEMORY 0xB8000
 #define COLS 80
 #define ROWS 25
