@@ -5,9 +5,7 @@ A simple and free operating system.
 
 ## Usage Recommendations
 - Better suited for Live USB/CD than permanent installation  
-- Shell script functionality available for extension
-- It may not be very portable because I developed it for x86, but it may be changed in the future.
-
+- Shell script functionalityAlthough it has been developed, it may be expanded in the future and strive to optimize it as a powerful system like Linux ().Although it has been developed, it may be expanded in the future and strive to optimize it as a powerful system like Linux.
 ## Supported Commands
 - `help`  
 - `clear`  
