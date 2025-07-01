@@ -5,7 +5,8 @@ A simple and free operating system.
 
 ## Usage Recommendations
 - Better suited for Live USB/CD than permanent installation  
-- Shell script functionalityAlthough it has been developed, it may be expanded in the future and strive to optimize it as a powerful system like Linux ().Although it has been developed, it may be expanded in the future and strive to optimize it as a powerful system like Linux.
+- Shell script functionalityAlthough it has been developed
+- Although it has been developed, it may be expanded in the future and strive to optimize it as a powerful system like Linux.
 ## Supported Commands
 - `help`  
 - `clear`  
