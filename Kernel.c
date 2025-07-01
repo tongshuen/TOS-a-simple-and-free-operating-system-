@@ -1,4 +1,4 @@
-/* kernel.c - 完整功能内核 */
+/* kernel.c - 64位长模式内核 */
 #define VIDEO_MEMORY 0xB8000
 #define COLS 80
 #define ROWS 25
@@ -87,18 +87,26 @@ void read_sectors(uint32_t lba, uint16_t count, void* buffer);
 void write_sectors(uint32_t lba, uint16_t count, const void* buffer);
 void init_fs();
 FatDirEntry* find_file(const char* name);
-int read_file(FatDirEntry* file, void* buffer);
-int write_file(const char* name, const void* data, uint32_t size);
-int delete_file(const char* name);
+uint64_t read_file(FatDirEntry* file, void* buffer);
+uint64_t write_file(const char* name, const void* data, uint64_t size);
+uint64_t delete_file(const char* name);
 void execute_command(const char* cmd);
 void shell();
+char getchar();
+void outb(uint16_t port, uint8_t value);
+uint8_t inb(uint16_t port);
 
-// 主函数
-void kmain() {
+// 内核入口 (64位)
+void _start() {
+    // 设置内核签名
+    asm volatile (
+        "mov $0x4F54534F, [0x100000] \n"  // "OSTOS"签名
+    );
+    
     clear_screen(COLOR_BLACK, COLOR_WHITE);
-    puts("TOS Kernel v2.0", COLOR_LGREEN, COLOR_BLACK);
+    puts("TOS Kernel v2.0 (64-bit)", COLOR_LGREEN, COLOR_BLACK);
     puts("Initializing...", COLOR_WHITE, COLOR_BLACK);
-    
+    
     init_fs();
     shell();
 }
@@ -107,7 +115,7 @@ void kmain() {
 void clear_screen(Color bg, Color fg) {
     uint16_t attr = (bg << 12) | (fg << 8);
     uint16_t blank = attr | ' ';
-    for (int i = 0; i < COLS * ROWS; i++) {
+    for (uint64_t i = 0; i < COLS * ROWS; i++) {
         video_mem[i] = blank;
     }
     cursor_pos = 0;
@@ -138,10 +146,10 @@ void putchar(char c, Color fg, Color bg) {
     }
 
     if (cursor_pos >= COLS * ROWS) {
-        for (int i = 0; i < (ROWS - 1) * COLS; i++) {
+        for (uint64_t i = 0; i < (ROWS - 1) * COLS; i++) {
             video_mem[i] = video_mem[i + COLS];
         }
-        for (int i = (ROWS - 1) * COLS; i < ROWS * COLS; i++) {
+        for (uint64_t i = (ROWS - 1) * COLS; i < ROWS * COLS; i++) {
             video_mem[i] = (COLOR_BLACK << 12) | (COLOR_WHITE << 8) | ' ';
         }
         cursor_pos = (ROWS - 1) * COLS;
@@ -175,63 +183,87 @@ void print_info(const char* msg) {
     putchar('\n', COLOR_WHITE, COLOR_BLACK);
 }
 
-// 读取磁盘扇区
+// 读取磁盘扇区 (64位版本)
 void read_sectors(uint32_t lba, uint16_t count, void* buffer) {
     asm volatile (
-        "mov %0, %%esi\n"
-        "mov %1, %%ecx\n"
-        "mov %2, %%edi\n"
-        "push %%ds\n"
-        "push %%es\n"
-        "mov $0x1000, %%ax\n"
-        "mov %%ax, %%ds\n"
-        "mov %%ax, %%es\n"
-        "xor %%bx, %%bx\n"
-        "1:\n"
-        "push %%ecx\n"
-        "mov $0x42, %%ah\n"
-        "mov $0x80, %%dl\n"
-        "mov %%esi, %%si\n"
-        "int $0x13\n"
-        "pop %%ecx\n"
-        "add $512, %%edi\n"
-        "inc %%esi\n"
-        "loop 1b\n"
-        "pop %%es\n"
-        "pop %%ds\n"
-        : 
-        : "r"(lba), "r"(count), "r"(buffer)
-        : "eax", "ebx", "ecx", "edx", "esi", "edi", "memory"
+        "mov %0, %%rdi \n"
+        "mov %1, %%ecx \n"
+        "mov %2, %%rbx \n"
+        "push %%rbx \n"
+        "push %%rcx \n"
+        "push %%rdi \n"
+        
+        "1: \n"
+        "mov $0x42, %%ah \n"
+        "mov $0x80, %%dl \n"
+        "mov %%ecx, %%esi \n"
+        "int $0x13 \n"
+        "jc 2f \n"
+        
+        "pop %%rdi \n"
+        "add $512, %%rdi \n"
+        "inc %%ecx \n"
+        "push %%rdi \n"
+        
+        "dec %%bx \n"
+        "jnz 1b \n"
+        
+        "jmp 3f \n"
+        
+        "2: \n"
+        "mov $0x0F450F520F450F44, %%rax \n"  // "DISK ERROR"
+        "mov %%rax, 0xB8000 \n"
+        "hlt \n"
+        
+        "3: \n"
+        "pop %%rdi \n"
+        "pop %%rcx \n"
+        "pop %%rbx \n"
+        : 
+        : "r"(buffer), "r"(lba), "r"(count)
+        : "rax", "rbx", "rcx", "rdx", "rdi", "rsi", "memory"
     );
 }
 
-// 写入磁盘扇区
+// 写入磁盘扇区 (64位版本)
 void write_sectors(uint32_t lba, uint16_t count, const void* buffer) {
     asm volatile (
-        "mov %0, %%esi\n"
-        "mov %1, %%ecx\n"
-        "mov %2, %%edi\n"
-        "push %%ds\n"
-        "push %%es\n"
-        "mov $0x1000, %%ax\n"
-        "mov %%ax, %%ds\n"
-        "mov %%ax, %%es\n"
-        "xor %%bx, %%bx\n"
-        "1:\n"
-        "push %%ecx\n"
-        "mov $0x43, %%ah\n"
-        "mov $0x80, %%dl\n"
-        "mov %%esi, %%si\n"
-        "int $0x13\n"
-        "pop %%ecx\n"
-        "add $512, %%edi\n"
-        "inc %%esi\n"
-        "loop 1b\n"
-        "pop %%es\n"
-        "pop %%ds\n"
-        : 
-        : "r"(lba), "r"(count), "r"(buffer)
-        : "eax", "ebx", "ecx", "edx", "esi", "edi", "memory"
+        "mov %0, %%rdi \n"
+        "mov %1, %%ecx \n"
+        "mov %2, %%rbx \n"
+        "push %%rbx \n"
+        "push %%rcx \n"
+        "push %%rdi \n"
+        
+        "1: \n"
+        "mov $0x43, %%ah \n"
+        "mov $0x80, %%dl \n"
+        "mov %%ecx, %%esi \n"
+        "int $0x13 \n"
+        "jc 2f \n"
+        
+        "pop %%rdi \n"
+        "add $512, %%rdi \n"
+        "inc %%ecx \n"
+        "push %%rdi \n"
+        
+        "dec %%bx \n"
+        "jnz 1b \n"
+        
+        "jmp 3f \n"
+        
+        "2: \n"
+        "mov $0x0F450F520F450F44, %%rax \n"  // "DISK ERROR"
+        "mov %%rax, 0xB8000 \n"
+        "hlt \n"
+        
+        "3: \n"
+        "pop %%rdi \n"
+        "pop %%rcx \n"
+        "pop %%rbx \n"
+        : 
+        : "r"(buffer), "r"(lba), "r"(count)
+        : "rax", "rbx", "rcx", "rdx", "rdi", "rsi", "memory"
     );
 }
 
@@ -239,12 +271,12 @@ void write_sectors(uint32_t lba, uint16_t count, const void* buffer) {
 void init_fs() {
     boot_sector = (FatBootSector*)0x7E00;
     root_dir = (FatDirEntry*)(0x7E00 + sizeof(FatBootSector));
-    
+    
     // 读取FAT表
     fat_table = (uint16_t*)0x10000;
     uint32_t fat_start = boot_sector->reserved_sectors;
     uint32_t fat_size = boot_sector->sectors_per_fat;
-    
+    
     for (uint32_t i = 0; i < fat_size; i++) {
         read_sectors(fat_start + i, 1, fat_table + (i * SECTOR_SIZE / 2));
     }
@@ -254,13 +286,13 @@ void init_fs() {
 FatDirEntry* find_file(const char* name) {
     for (uint16_t i = 0; i < boot_sector->root_entries; i++) {
         if (root_dir[i].name[0] == 0xE5 || root_dir[i].name[0] == 0) continue;
-        
+        
         char fullname[12];
         memcpy(fullname, root_dir[i].name, 8);
         fullname[8] = '.';
         memcpy(fullname + 9, root_dir[i].ext, 3);
         fullname[12] = '\0';
-        
+        
         if (strcmp(fullname, name) == 0) {
             return &root_dir[i];
         }
@@ -269,41 +301,41 @@ FatDirEntry* find_file(const char* name) {
 }
 
 // 读取文件
-int read_file(FatDirEntry* file, void* buffer) {
+uint64_t read_file(FatDirEntry* file, void* buffer) {
     uint16_t cluster = file->cluster_low;
-    uint32_t size = file->file_size;
+    uint64_t size = file->file_size;
     uint8_t* ptr = (uint8_t*)buffer;
-    uint32_t read = 0;
-    
+    uint64_t read = 0;
+    
     while (cluster < 0xFFF8 && read < size) {
-        uint32_t sector = boot_sector->reserved_sectors + 
+        uint32_t sector = boot_sector->reserved_sectors + 
                          (boot_sector->fat_count * boot_sector->sectors_per_fat) +
                          ((cluster - 2) * boot_sector->sectors_per_cluster);
-        
+        
         for (int i = 0; i < boot_sector->sectors_per_cluster; i++) {
             uint8_t sector_buf[SECTOR_SIZE];
             read_sectors(sector + i, 1, sector_buf);
-            
-            uint32_t to_copy = SECTOR_SIZE;
+            
+            uint64_t to_copy = SECTOR_SIZE;
             if (read + to_copy > size) {
                 to_copy = size - read;
             }
-            
+            
             memcpy(ptr, sector_buf, to_copy);
             ptr += to_copy;
             read += to_copy;
-            
+            
             if (read >= size) break;
         }
-        
+        
         cluster = fat_table[cluster];
     }
-    
+    
     return read;
 }
 
 // 写入文件
-int write_file(const char* name, const void* data, uint32_t size) {
+uint64_t write_file(const char* name, const void* data, uint64_t size) {
     FatDirEntry* entry = NULL;
     for (uint16_t i = 0; i < boot_sector->root_entries; i++) {
         if (root_dir[i].name[0] == 0xE5) {
@@ -312,40 +344,40 @@ int write_file(const char* name, const void* data, uint32_t size) {
         }
     }
     if (!entry) return 0;
-    
+    
     // 解析文件名
     char base[9], ext[4];
     memset(base, ' ', 8);
     memset(ext, ' ', 3);
-    
+    
     const char* dot = strchr(name, '.');
     if (dot) {
-        int base_len = dot - name;
+        uint64_t base_len = dot - name;
         if (base_len > 8) base_len = 8;
         memcpy(base, name, base_len);
-        
-        int ext_len = strlen(dot + 1);
+        
+        uint64_t ext_len = strlen(dot + 1);
         if (ext_len > 3) ext_len = 3;
         memcpy(ext, dot + 1, ext_len);
     } else {
-        int name_len = strlen(name);
+        uint64_t name_len = strlen(name);
         if (name_len > 8) name_len = 8;
         memcpy(base, name, name_len);
     }
-    
+    
     // 设置目录项
     memcpy(entry->name, base, 8);
     memcpy(entry->ext, ext, 3);
     entry->attributes = 0;
     entry->file_size = size;
-    
+    
     // 分配簇链
-    uint16_t clusters_needed = (size + SECTOR_SIZE * boot_sector->sectors_per_cluster - 1) / 
+    uint16_t clusters_needed = (size + SECTOR_SIZE * boot_sector->sectors_per_cluster - 1) / 
                               (SECTOR_SIZE * boot_sector->sectors_per_cluster);
-    
+    
     uint16_t prev_cluster = 0;
     uint16_t first_cluster = 0;
-    
+    
     for (uint16_t i = 2; i < 0xFFF0 && clusters_needed > 0; i++) {
         if (fat_table[i] == 0) {
             if (prev_cluster == 0) {
@@ -357,56 +389,56 @@ int write_file(const char* name, const void* data, uint32_t size) {
             clusters_needed--;
         }
     }
-    
+    
     if (clusters_needed > 0) return 0;
-    
+    
     fat_table[prev_cluster] = 0xFFFF;
     entry->cluster_low = first_cluster;
-    
+    
     // 写入数据
     uint16_t cluster = first_cluster;
     const uint8_t* ptr = (const uint8_t*)data;
-    uint32_t written = 0;
-    
+    uint64_t written = 0;
+    
     while (cluster < 0xFFF8 && written < size) {
-        uint32_t sector = boot_sector->reserved_sectors + 
+        uint32_t sector = boot_sector->reserved_sectors + 
                          (boot_sector->fat_count * boot_sector->sectors_per_fat) +
                          ((cluster - 2) * boot_sector->sectors_per_cluster);
-        
+        
         for (int i = 0; i < boot_sector->sectors_per_cluster; i++) {
             uint8_t sector_buf[SECTOR_SIZE];
-            uint32_t to_write = SECTOR_SIZE;
+            uint64_t to_write = SECTOR_SIZE;
             if (written + to_write > size) {
                 to_write = size - written;
                 memset(sector_buf, 0, SECTOR_SIZE);
             }
-            
+            
             memcpy(sector_buf, ptr, to_write);
             write_sectors(sector + i, 1, sector_buf);
             ptr += to_write;
             written += to_write;
-            
+            
             if (written >= size) break;
         }
-        
+        
         cluster = fat_table[cluster];
     }
-    
+    
     return written;
 }
 
 // 删除文件
-int delete_file(const char* name) {
+uint64_t delete_file(const char* name) {
     FatDirEntry* entry = find_file(name);
     if (!entry) return 0;
-    
+    
     uint16_t cluster = entry->cluster_low;
     while (cluster < 0xFFF8) {
         uint16_t next = fat_table[cluster];
         fat_table[cluster] = 0;
         cluster = next;
     }
-    
+    
     entry->name[0] = 0xE5;
     return 1;
 }
@@ -415,14 +447,14 @@ int delete_file(const char* name) {
 void execute_command(const char* cmd) {
     char command[MAX_CMD_LEN];
     char args[MAX_CMD_LEN] = {0};
-    
+    
     strcpy(command, cmd);
     char* space = strchr(command, ' ');
     if (space) {
         *space = '\0';
         strcpy(args, space + 1);
     }
-    
+    
     if (strcmp(command, "help") == 0) {
         puts("Available commands:", COLOR_WHITE, COLOR_BLACK);
         puts("help      - Show this help", COLOR_WHITE, COLOR_BLACK);
@@ -431,7 +463,7 @@ void execute_command(const char* cmd) {
         puts("cat <file>- Show file content", COLOR_WHITE, COLOR_BLACK);
         puts("write <file> <text> - Write text to file", COLOR_WHITE, COLOR_BLACK);
         puts("delete <file> - Delete file", COLOR_WHITE, COLOR_BLACK);
-    } 
+    } 
     else if (strcmp(command, "clear") == 0) {
         clear_screen(COLOR_BLACK, COLOR_WHITE);
     }
@@ -439,13 +471,13 @@ void execute_command(const char* cmd) {
         puts("Files:", COLOR_CYAN, COLOR_BLACK);
         for (uint16_t i = 0; i < boot_sector->root_entries; i++) {
             if (root_dir[i].name[0] == 0xE5 || root_dir[i].name[0] == 0) continue;
-            
+            
             char name[12];
             memcpy(name, root_dir[i].name, 8);
             name[8] = '.';
             memcpy(name + 9, root_dir[i].ext, 3);
             name[12] = '\0';
-            
+            
             puts(" - ", COLOR_WHITE, COLOR_BLACK);
             puts(name, COLOR_LGREEN, COLOR_BLACK);
             putchar('\n', COLOR_WHITE, COLOR_BLACK);
@@ -457,12 +489,12 @@ void execute_command(const char* cmd) {
             print_error("File not found");
             return;
         }
-        
+        
         uint8_t* buffer = (uint8_t*)0x100000;
-        int size = read_file(file, buffer);
-        
+        uint64_t size = read_file(file, buffer);
+        
         puts("File content:", COLOR_CYAN, COLOR_BLACK);
-        for (int i = 0; i < size && i < 1024; i++) {
+        for (uint64_t i = 0; i < size && i < 1024; i++) {
             putchar(buffer[i], COLOR_WHITE, COLOR_BLACK);
             if (i % COLS == COLS - 1) putchar('\n', COLOR_WHITE, COLOR_BLACK);
         }
@@ -471,12 +503,12 @@ void execute_command(const char* cmd) {
     else if (strcmp(command, "write") == 0) {
         char* filename = strtok(args, " ");
         char* text = strtok(NULL, "");
-        
+        
         if (!filename || !text) {
             print_error("Usage: write <file> <text>");
             return;
         }
-        
+        
         if (write_file(filename, text, strlen(text))) {
             print_success("File written successfully");
         } else {
@@ -498,18 +530,18 @@ void execute_command(const char* cmd) {
 // Shell
 void shell() {
     char input[MAX_CMD_LEN + 1];
-    int pos = 0;
-    
+    uint64_t pos = 0;
+    
     puts("TOS Shell - Type 'help' for commands", COLOR_LGREEN, COLOR_BLACK);
-    
+    
     while (1) {
         puts(current_prompt, COLOR_YELLOW, COLOR_BLACK);
-        
+        
         // 读取输入
         pos = 0;
         while (1) {
             char c = getchar();
-            
+            
             if (c == '\n') {
                 putchar('\n', COLOR_WHITE, COLOR_BLACK);
                 input[pos] = '\0';
@@ -526,7 +558,7 @@ void shell() {
                 input[pos++] = c;
             }
         }
-        
+        
         // 执行命令
         if (pos > 0) {
             execute_command(input);
