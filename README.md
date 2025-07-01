@@ -1,11 +1,11 @@
 # Simple OS Project
 
 A simple and free operating system.  
-*(Not guaranteed to be fully compilable/usable - recommended to test in VM first)*
 
-## Usage Recommendations
+
+## Instructions for use
+- Not guaranteed to be fully compilable/usable - recommended to test in VM first
 - Better suited for Live USB/CD than permanent installation  
-- Shell script functionalityAlthough it has been developed
 - Although it has been developed, it may be expanded in the future and strive to optimize it as a powerful system like Linux.
 ## Supported Commands
 - `help`  
