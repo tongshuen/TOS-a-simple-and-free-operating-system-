@@ -447,14 +447,16 @@ uint64_t delete_file(const char* name) {
 void execute_command(const char* cmd) {
     char command[MAX_CMD_LEN];
     char args[MAX_CMD_LEN] = {0};
-    
+    static char script_buffer[4096];
+    static uint16_t current_cluster = 0;
+    
     strcpy(command, cmd);
     char* space = strchr(command, ' ');
     if (space) {
         *space = '\0';
         strcpy(args, space + 1);
     }
-    
+
     if (strcmp(command, "help") == 0) {
         puts("Available commands:", COLOR_WHITE, COLOR_BLACK);
         puts("help      - Show this help", COLOR_WHITE, COLOR_BLACK);
@@ -462,69 +464,728 @@ void execute_command(const char* cmd) {
         puts("ls        - List files", COLOR_WHITE, COLOR_BLACK);
         puts("cat <file>- Show file content", COLOR_WHITE, COLOR_BLACK);
         puts("write <file> <text> - Write text to file", COLOR_WHITE, COLOR_BLACK);
-        puts("delete <file> - Delete file", COLOR_WHITE, COLOR_BLACK);
-    } 
+        puts("rm <file> - Delete file", COLOR_WHITE, COLOR_BLACK);
+        puts("mkdir <dir> - Create directory", COLOR_WHITE, COLOR_BLACK);
+        puts("cd <dir> - Change directory", COLOR_WHITE, COLOR_BLACK);
+        puts("reboot   - Reboot system", COLOR_WHITE, COLOR_BLACK);
+        puts("turnoff  - Power off system", COLOR_WHITE, COLOR_BLACK);
+        puts("echo <text> - Print text", COLOR_WHITE, COLOR_BLACK);
+        puts("run <file.sh> - Execute shell script", COLOR_WHITE, COLOR_BLACK);
+        puts("nano <file> - Text editor", COLOR_WHITE, COLOR_BLACK);
+
+    } 
+    else if (strcmp(command, "nano") == 0) {
+    if (strlen(args) == 0) {
+        print_error("Usage: nano <filename>");
+        return;
+    }
+    
+        nano(args);
+    }
     else if (strcmp(command, "clear") == 0) {
         clear_screen(COLOR_BLACK, COLOR_WHITE);
     }
     else if (strcmp(command, "ls") == 0) {
-        puts("Files:", COLOR_CYAN, COLOR_BLACK);
-        for (uint16_t i = 0; i < boot_sector->root_entries; i++) {
-            if (root_dir[i].name[0] == 0xE5 || root_dir[i].name[0] == 0) continue;
-            
-            char name[12];
-            memcpy(name, root_dir[i].name, 8);
-            name[8] = '.';
-            memcpy(name + 9, root_dir[i].ext, 3);
-            name[12] = '\0';
-            
-            puts(" - ", COLOR_WHITE, COLOR_BLACK);
-            puts(name, COLOR_LGREEN, COLOR_BLACK);
-            putchar('\n', COLOR_WHITE, COLOR_BLACK);
-        }
+        list_files(current_cluster);
     }
     else if (strcmp(command, "cat") == 0) {
-        FatDirEntry* file = find_file(args);
-        if (!file) {
-            print_error("File not found");
+        if (strlen(args) == 0) {
+            print_error("Usage: cat <filename>");
             return;
         }
-        
-        uint8_t* buffer = (uint8_t*)0x100000;
-        uint64_t size = read_file(file, buffer);
-        
-        puts("File content:", COLOR_CYAN, COLOR_BLACK);
-        for (uint64_t i = 0; i < size && i < 1024; i++) {
-            putchar(buffer[i], COLOR_WHITE, COLOR_BLACK);
-            if (i % COLS == COLS - 1) putchar('\n', COLOR_WHITE, COLOR_BLACK);
-        }
-        putchar('\n', COLOR_WHITE, COLOR_BLACK);
+        view_file(args, current_cluster);
     }
     else if (strcmp(command, "write") == 0) {
         char* filename = strtok(args, " ");
         char* text = strtok(NULL, "");
-        
+        
         if (!filename || !text) {
             print_error("Usage: write <file> <text>");
             return;
         }
-        
-        if (write_file(filename, text, strlen(text))) {
+        
+        if (write_to_file(filename, text, strlen(text), current_cluster)) {
             print_success("File written successfully");
         } else {
             print_error("Failed to write file");
         }
     }
-    else if (strcmp(command, "delete") == 0) {
-        if (delete_file(args)) {
+    else if (strcmp(command, "rm") == 0) {
+        if (strlen(args) == 0) {
+            print_error("Usage: rm <filename>");
+            return;
+        }
+        
+        if (remove_file(args, current_cluster)) {
             print_success("File deleted successfully");
         } else {
             print_error("Failed to delete file");
         }
     }
+    else if (strcmp(command, "mkdir") == 0) {
+        if (strlen(args) == 0) {
+            print_error("Usage: mkdir <dirname>");
+            return;
+        }
+        
+        if (create_directory(args, current_cluster)) {
+            print_success("Directory created");
+        } else {
+            print_error("Failed to create directory");
+        }
+    }
+    else if (strcmp(command, "cd") == 0) {
+        if (strlen(args) == 0) {
+            snprintf(current_dir, MAX_PATH_LEN, "/");
+            snprintf(current_prompt, MAX_PATH_LEN + 4, "/ $ ");
+            current_cluster = 0;
+            return;
+        }
+        
+        uint16_t new_cluster = change_directory(args, current_cluster);
+        if (new_cluster != 0xFFFF) {
+            current_cluster = new_cluster;
+            update_prompt();
+        } else {
+            print_error("Directory not found");
+        }
+    }
+    else if (strcmp(command, "reboot") == 0) {
+        puts("Rebooting system...", COLOR_YELLOW, COLOR_BLACK);
+        outb(0x64, 0xFE);
+        while(1);
+    }
+    else if (strcmp(command, "turnoff") == 0) {
+        puts("Powering off...", COLOR_YELLOW, COLOR_BLACK);
+        // ACPI shutdown
+        outw(0x604, 0x2000);
+        while(1);
+    }
+    else if (strcmp(command, "echo") == 0) {
+        puts(args, COLOR_WHITE, COLOR_BLACK);
+        putchar('\n', COLOR_WHITE, COLOR_BLACK);
+    }
+    else if (strcmp(command, "run") == 0) {
+        if (strlen(args) == 0) {
+            print_error("Usage: run <script.sh>");
+            return;
+        }
+        
+        if (strstr(args, ".sh") == NULL) {
+            print_error("Only .sh scripts are supported");
+            return;
+        }
+        
+        execute_script(args, current_cluster);
+    }
     else {
         print_error("Unknown command");
     }
+}
+void execute_script(const char* filename, uint16_t current_cluster) {
+    FatDirEntry* file = find_file_in_cluster(filename, current_cluster);
+    if (!file) {
+        print_error("Script not found");
+        return;
+    }
+    
+    uint8_t* buffer = (uint8_t*)0x200000;
+    uint64_t size = read_file_from_cluster(file, buffer, current_cluster);
+    buffer[size] = '\0';
+    
+    char* lines[256];
+    uint16_t line_count = 0;
+    
+    // Split into lines
+    char* line = strtok(buffer, "\n");
+    while (line && line_count < 256) {
+        lines[line_count++] = line;
+        line = strtok(NULL, "\n");
+    }
+    
+    // Execute lines
+    for (uint16_t i = 0; i < line_count; i++) {
+        char* cmd = lines[i];
+        while (*cmd == ' ' || *cmd == '\t') cmd++; // Skip leading whitespace
+        
+        // Skip comments
+        if (*cmd == '#' || *cmd == '\0') continue;
+        
+        // Handle control structures
+        if (strncmp(cmd, "if ", 3) == 0) {
+            // Simplified if implementation
+            char condition[256];
+            char then_part[256];
+            sscanf(cmd + 3, "%[ then ] %[^\n]", condition, then_part);
+            
+            if (check_condition(condition)) {
+                execute_command(then_part);
+            }
+        } 
+        else if (strncmp(cmd, "for ", 4) == 0) {
+            // Simplified for implementation
+            char var[32], range[32], do_part[256];
+            sscanf(cmd + 4, "%s in %[ do ] %[^\n]", var, range, do_part);
+            
+            int start, end;
+            sscanf(range, "%d..%d", &start, &end);
+            
+            for (int i = start; i <= end; i++) {
+                char expanded_cmd[256];
+                snprintf(expanded_cmd, sizeof(expanded_cmd), "%s=%d %s", var, i, do_part);
+                execute_command(expanded_cmd);
+            }
+        }
+        else if (strncmp(cmd, "def ", 4) == 0) {
+            // Function definition (stored in memory)
+            char func_name[32];
+            char func_body[256];
+            sscanf(cmd + 4, "%s %[^\n]", func_name, func_body);
+            store_function(func_name, func_body);
+        }
+        else if (strncmp(cmd, "while ", 6) == 0) {
+            // Simplified while implementation
+            char condition[256];
+            char do_part[256];
+            sscanf(cmd + 6, "%[ do ] %[^\n]", condition, do_part);
+            
+            while (check_condition(condition)) {
+                execute_command(do_part);
+            }
+        }
+        else {
+            // Regular command
+            execute_command(cmd);
+        }
+    }
+}
+int create_directory(const char* name, uint16_t current_cluster) {
+    // Check for invalid characters
+    if (strchr(name, '/') || strchr(name, '\\') || strchr(name, ':') || 
+        strchr(name, '*') || strchr(name, '?') || strchr(name, '"') || 
+        strchr(name, '<') || strchr(name, '>') || strchr(name, '|')) {
+        return 0;
+    }
+    
+    // Find free directory entry
+    FatDirEntry* entry = find_free_entry(current_cluster);
+    if (!entry) return 0;
+    
+    // Parse directory name
+    char base[9], ext[4];
+    memset(base, ' ', 8);
+    memset(ext, ' ', 3);
+    
+    const char* dot = strchr(name, '.');
+    if (dot) {
+        uint64_t base_len = dot - name;
+        if (base_len > 8) base_len = 8;
+        memcpy(base, name, base_len);
+        
+        uint64_t ext_len = strlen(dot + 1);
+        if (ext_len > 3) ext_len = 3;
+        memcpy(ext, dot + 1, ext_len);
+    } else {
+        uint64_t name_len = strlen(name);
+        if (name_len > 8) name_len = 8;
+        memcpy(base, name, name_len);
+    }
+    
+    // Create directory entry
+    memcpy(entry->name, base, 8);
+    memcpy(entry->ext, ext, 3);
+    entry->attributes = 0x10; // Directory attribute
+    entry->file_size = 0;
+    
+    // Allocate cluster for directory
+    uint16_t new_cluster = allocate_cluster();
+    if (new_cluster == 0) {
+        entry->name[0] = 0xE5;
+        return 0;
+    }
+    
+    entry->cluster_low = new_cluster;
+    fat_table[new_cluster] = 0xFFFF;
+    
+    // Initialize directory with . and .. entries
+    FatDirEntry dot_entry, dotdot_entry;
+    memset(&dot_entry, 0, sizeof(FatDirEntry));
+    memset(&dotdot_entry, 0, sizeof(FatDirEntry));
+    
+    memcpy(dot_entry.name, ".       ", 8);
+    dot_entry.attributes = 0x10;
+    dot_entry.cluster_low = new_cluster;
+    
+    memcpy(dotdot_entry.name, "..      ", 8);
+    dotdot_entry.attributes = 0x10;
+    dotdot_entry.cluster_low = current_cluster;
+    
+    uint32_t sector = cluster_to_sector(new_cluster);
+    FatDirEntry init_entries[2] = {dot_entry, dotdot_entry};
+    write_sectors(sector, 1, init_entries);
+    
+    return 1;
+
+int create_directory(const char* name, uint16_t current_cluster) {
+    // Check for invalid characters
+    if (strchr(name, '/') || strchr(name, '\\') || strchr(name, ':') || 
+        strchr(name, '*') || strchr(name, '?') || strchr(name, '"') || 
+        strchr(name, '<') || strchr(name, '>') || strchr(name, '|')) {
+        return 0;
+    }
+    
+    // Find free directory entry
+    FatDirEntry* entry = find_free_entry(current_cluster);
+    if (!entry) return 0;
+    
+    // Parse directory name
+    char base[9], ext[4];
+    memset(base, ' ', 8);
+    memset(ext, ' ', 3);
+    
+    const char* dot = strchr(name, '.');
+    if (dot) {
+        uint64_t base_len = dot - name;
+        if (base_len > 8) base_len = 8;
+        memcpy(base, name, base_len);
+        
+        uint64_t ext_len = strlen(dot + 1);
+        if (ext_len > 3) ext_len = 3;
+        memcpy(ext, dot + 1, ext_len);
+    } else {
+        uint64_t name_len = strlen(name);
+        if (name_len > 8) name_len = 8;
+        memcpy(base, name, name_len);
+    }
+    
+    // Create directory entry
+    memcpy(entry->name, base, 8);
+    memcpy(entry->ext, ext, 3);
+    entry->attributes = 0x10; // Directory attribute
+    entry->file_size = 0;
+    
+    // Allocate cluster for directory
+    uint16_t new_cluster = allocate_cluster();
+    if (new_cluster == 0) {
+        entry->name[0] = 0xE5;
+        return 0;
+    }
+    
+    entry->cluster_low = new_cluster;
+    fat_table[new_cluster] = 0xFFFF;
+    
+    // Initialize directory with . and .. entries
+    FatDirEntry dot_entry, dotdot_entry;
+    memset(&dot_entry, 0, sizeof(FatDirEntry));
+    memset(&dotdot_entry, 0, sizeof(FatDirEntry));
+    
+    memcpy(dot_entry.name, ".       ", 8);
+    dot_entry.attributes = 0x10;
+    dot_entry.cluster_low = new_cluster;
+    
+    memcpy(dotdot_entry.name, "..      ", 8);
+    dotdot_entry.attributes = 0x10;
+    dotdot_entry.cluster_low = current_cluster;
+    
+    uint32_t sector = cluster_to_sector(new_cluster);
+    FatDirEntry init_entries[2] = {dot_entry, dotdot_entry};
+    write_sectors(sector, 1, init_entries);
+    
+    return 1;
+}
+uint16_t change_directory(const char* name, uint16_t current_cluster) {
+    if (strcmp(name, "..") == 0) {
+        if (current_cluster == 0) return 0; // Already at root
+        
+        // Find parent cluster from .. entry
+        uint32_t sector = cluster_to_sector(current_cluster);
+        FatDirEntry entries[16];
+        read_sectors(sector, 1, entries);
+        
+        for (int i = 0; i < 16; i++) {
+            if (strncmp(entries[i].name, "..      ", 8) == 0) {
+                return entries[i].cluster_low;
+            }
+        }
+        return 0xFFFF;
+    }
+    
+    FatDirEntry* dir = find_file_in_cluster(name, current_cluster);
+    if (!dir || !(dir->attributes & 0x10)) {
+        return 0xFFFF;
+    }
+    
+    return dir->cluster_low;
+}
+uint16_t change_directory(const char* name, uint16_t current_cluster) {
+    if (strcmp(name, "..") == 0) {
+        if (current_cluster == 0) return 0; // Already at root
+        
+        // Find parent cluster from .. entry
+        uint32_t sector = cluster_to_sector(current_cluster);
+        FatDirEntry entries[16];
+        read_sectors(sector, 1, entries);
+        
+        for (int i = 0; i < 16; i++) {
+            if (strncmp(entries[i].name, "..      ", 8) == 0) {
+                return entries[i].cluster_low;
+            }
+        }
+        return 0xFFFF;
+    }
+    
+    FatDirEntry* dir = find_file_in_cluster(name, current_cluster);
+    if (!dir || !(dir->attributes & 0x10)) {
+        return 0xFFFF;
+    }
+    
+    return dir->cluster_low;
+}
+int remove_file(const char* name, uint16_t current_cluster) {
+    FatDirEntry* entry = find_file_in_cluster(name, current_cluster);
+    if (!entry) return 0;
+    
+    // Free clusters
+    uint16_t cluster = entry->cluster_low;
+    while (cluster < 0xFFF8) {
+        uint16_t next = fat_table[cluster];
+        fat_table[cluster] = 0;
+        cluster = next;
+    }
+    
+    // Mark entry as deleted
+    entry->name[0] = 0xE5;
+    
+    // Write back directory sector
+    uint32_t sector = cluster_to_sector(current_cluster);
+    write_sectors(sector, 1, (void*)((uint64_t)entry & ~0x1FF));
+    
+    return 1;
+}
+void update_prompt() {
+    if (strcmp(current_dir, "/") == 0) {
+        snprintf(current_prompt, MAX_PATH_LEN + 4, "/ $ ");
+        return;
+    }
+    
+    // Get current directory name by walking up the cluster chain
+    char temp_dir[MAX_PATH_LEN] = "";
+    uint16_t cluster = current_cluster;
+    
+    while (cluster != 0) {
+        uint32_t sector = cluster_to_sector(cluster);
+        FatDirEntry entries[16];
+        read_sectors(sector, 1, entries);
+        
+        for (int i = 0; i < 16; i++) {
+            if (strncmp(entries[i].name, "..      ", 8) == 0) {
+                cluster = entries[i].cluster_low;
+                break;
+            }
+        }
+        
+        for (int i = 0; i < 16; i++) {
+            if (entries[i].cluster_low == current_cluster && 
+                strncmp(entries[i].name, ".       ", 8) != 0 &&
+                strncmp(entries[i].name, "..      ", 8) != 0) {
+                char name[12];
+                memcpy(name, entries[i].name, 8);
+                name[8] = '\0';
+                strcat(temp_dir, "/");
+                strcat(temp_dir, name);
+                break;
+            }
+        }
+    }
+    
+    if (strlen(temp_dir) == 0) {
+        strcpy(current_dir, "/");
+    } else {
+        strcpy(current_dir, temp_dir);
+    }
+    
+    snprintf(current_prompt, MAX_PATH_LEN + 4, "%s $ ", current_dir);
+}
+int check_condition(const char* condition) {
+    // Simple condition checking for if/while statements
+    char var[32], op[3], value[32];
+    sscanf(condition, "%s %s %s", var, op, value);
+    
+    // TODO: Implement proper variable lookup
+    int var_val = 0;
+    int cmp_val = atoi(value);
+    
+    if (strcmp(op, "==") == 0) {
+        return var_val == cmp_val;
+    } else if (strcmp(op, "!=") == 0) {
+        return var_val != cmp_val;
+    } else if (strcmp(op, "<") == 0) {
+        return var_val < cmp_val;
+    } else if (strcmp(op, ">") == 0) {
+        return var_val > cmp_val;
+    } else if (strcmp(op, "<=") == 0) {
+        return var_val <= cmp_val;
+    } else if (strcmp(op, ">=") == 0) {
+        return var_val >= cmp_val;
+    }
+    
+    return 0;
+}
+void store_function(const char* name, const char* body) {
+    // TODO: Implement proper function storage
+    // For now just print the definition
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Defined function %s: %s", name, body);
+    print_info(msg);
+}
+// Helper to find file in specific cluster
+FatDirEntry* find_file_in_cluster(const char* name, uint16_t cluster) {
+    uint32_t sector = cluster_to_sector(cluster);
+    FatDirEntry entries[16];
+    read_sectors(sector, 1, entries);
+    
+    for (int i = 0; i < 16; i++) {
+        if (entries[i].name[0] == 0xE5 || entries[i].name[0] == 0) continue;
+        
+        char fullname[12];
+        memcpy(fullname, entries[i].name, 8);
+        fullname[8] = '.';
+        memcpy(fullname + 9, entries[i].ext, 3);
+        fullname[12] = '\0';
+        
+        if (strcmp(fullname, name) == 0) {
+            return &entries[i];
+        }
+    }
+    return NULL;
+}
+
+// Helper to read file from specific cluster
+uint64_t read_file_from_cluster(FatDirEntry* file, void* buffer, uint16_t cluster) {
+    // Same as original read_file but respects cluster parameter
+    uint16_t file_cluster = file->cluster_low;
+    uint64_t size = file->file_size;
+    uint8_t* ptr = (uint8_t*)buffer;
+    uint64_t read = 0;
+    
+    while (file_cluster < 0xFFF8 && read < size) {
+        uint32_t sector = cluster_to_sector(file_cluster);
+        
+        for (int i = 0; i < boot_sector->sectors_per_cluster; i++) {
+            uint8_t sector_buf[SECTOR_SIZE];
+            read_sectors(sector + i, 1, sector_buf);
+            
+            uint64_t to_copy = SECTOR_SIZE;
+            if (read + to_copy > size) {
+                to_copy = size - read;
+            }
+            
+            memcpy(ptr, sector_buf, to_copy);
+            ptr += to_copy;
+            read += to_copy;
+            
+            if (read >= size) break;
+        }
+        
+        file_cluster = fat_table[file_cluster];
+    }
+    
+    return read;
+}
+
+// Helper to convert cluster to sector
+uint32_t cluster_to_sector(uint16_t cluster) {
+    return boot_sector->reserved_sectors + 
+           (boot_sector->fat_count * boot_sector->sectors_per_fat) +
+           ((cluster - 2) * boot_sector->sectors_per_cluster);
+}
+
+// Helper to allocate new cluster
+uint16_t allocate_cluster() {
+    for (uint16_t i = 2; i < 0xFFF0; i++) {
+        if (fat_table[i] == 0) {
+            fat_table[i] = 0xFFFF;
+            return i;
+        }
+    }
+    return 0;
+}
+
+// Helper to find free directory entry
+FatDirEntry* find_free_entry(uint16_t cluster) {
+    uint32_t sector = cluster_to_sector(cluster);
+    FatDirEntry entries[16];
+    read_sectors(sector, 1, entries);
+    
+    for (int i = 0; i < 16; i++) {
+        if (entries[i].name[0] == 0xE5 || entries[i].name[0] == 0) {
+            return &entries[i];
+        }
+    }
+    return NULL;
+}
+void nano(const char* filename) {
+    #define NANO_ROWS (ROWS - 2)
+    #define NANO_COLS COLS
+    
+    uint16_t original_pos = cursor_pos;
+    Color original_fg = COLOR_WHITE;
+    Color original_bg = COLOR_BLACK;
+    
+    // 加载文件内容
+    FatDirEntry* file = find_file_in_cluster(filename, current_cluster);
+    char* buffer = (char*)0x300000;
+    uint64_t file_size = 0;
+    
+    if (file) {
+        file_size = read_file_from_cluster(file, buffer, current_cluster);
+        buffer[file_size] = '\0';
+    } else {
+        buffer[0] = '\0';
+    }
+    
+    // 初始化编辑状态
+    uint16_t cursor_x = 0;
+    uint16_t cursor_y = 0;
+    uint16_t offset = 0;
+    uint16_t lines = 0;
+    char modified = 0;
+    
+    // 计算行数
+    for (uint64_t i = 0; i < file_size; i++) {
+        if (buffer[i] == '\n') lines++;
+    }
+    if (file_size > 0 && buffer[file_size-1] != '\n') lines++;
+    
+    // 主编辑循环
+    clear_screen(COLOR_BLACK, COLOR_LGRAY);
+    puts("TOS Nano Editor - Ctrl+S: Save | Ctrl+X: Exit", COLOR_BLACK, COLOR_WHITE);
+    
+    while (1) {
+        // 显示文本内容
+        uint16_t display_lines = 0;
+        uint64_t line_start = 0;
+        
+        for (uint64_t i = 0; i < file_size && display_lines < NANO_ROWS; ) {
+            uint64_t line_end = i;
+            while (line_end < file_size && buffer[line_end] != '\n') line_end++;
+            
+            if (display_lines >= offset) {
+                uint16_t row = display_lines - offset + 1;
+                uint16_t col = 0;
+                
+                // 清除行
+                for (col = 0; col < NANO_COLS; col++) {
+                    video_mem[row * COLS + col] = (COLOR_BLACK << 12) | (COLOR_LGRAY << 8) | ' ';
+                }
+                
+                // 显示行内容
+                col = 0;
+                for (uint64_t j = i; j < line_end && col < NANO_COLS; j++, col++) {
+                    video_mem[row * COLS + col] = (COLOR_BLACK << 12) | (COLOR_LGRAY << 8) | buffer[j];
+                }
+            }
+            
+            if (line_end < file_size) line_end++;
+            i = line_end;
+            display_lines++;
+        }
+        
+        // 显示状态栏
+        char status[COLS];
+        snprintf(status, COLS, "File: %s - Lines: %d - %s", 
+                filename, lines + 1, modified ? "Modified" : "");
+        for (int i = 0; i < COLS; i++) {
+            video_mem[(ROWS - 1) * COLS + i] = (COLOR_WHITE << 12) | (COLOR_BLACK << 8) | 
+                                              (i < strlen(status) ? status[i] : ' ');
+        }
+        
+        // 设置光标位置
+        uint16_t cursor_screen_pos = (cursor_y - offset + 1) * COLS + cursor_x;
+        if (cursor_screen_pos < COLS * ROWS) {
+            uint16_t* cursor_cell = &video_mem[cursor_screen_pos];
+            *cursor_cell = (*cursor_cell & 0xFF00) | 0x5F; // 下划线光标
+            set_cursor(cursor_screen_pos);
+        }
+        
+        // 处理输入
+        char c = getchar();
+        
+        // 清除光标效果
+        if (cursor_screen_pos < COLS * ROWS) {
+            uint16_t* cursor_cell = &video_mem[cursor_screen_pos];
+            *cursor_cell = (*cursor_cell & 0xFF00) | buffer[cursor_y * COLS + cursor_x];
+        }
+        
+        // 处理控制键
+        if (c == 0x1D) { // Ctrl
+            c = getchar();
+            switch (c) {
+                case 's': // Ctrl+S 保存
+                    if (write_to_file(filename, buffer, strlen(buffer), current_cluster)) {
+                        modified = 0;
+                        print_info("File saved successfully");
+                    } else {
+                        print_error("Failed to save file");
+                    }
+                    continue;
+                case 'x': // Ctrl+X 退出
+                    clear_screen(original_bg, original_fg);
+                    set_cursor(original_pos);
+                    return;
+                case 'k': // Ctrl+K 删除行
+                    // 实现删除行逻辑
+                    continue;
+            }
+        }
+        
+        // 处理普通键
+        switch (c) {
+            case '\n': // 回车
+                // 实现换行逻辑
+                break;
+            case '\b': // 退格
+                if (cursor_x > 0 || cursor_y > 0) {
+                    // 实现退格逻辑
+                    modified = 1;
+                }
+                break;
+            case 0x1B: // ESC
+                // 处理方向键
+                c = getchar(); // 跳过[
+                c = getchar();
+                switch (c) {
+                    case 'A': // 上
+                        if (cursor_y > 0) cursor_y--;
+                        break;
+                    case 'B': // 下
+                        if (cursor_y < lines) cursor_y++;
+                        break;
+                    case 'C': // 右
+                        if (cursor_x < NANO_COLS - 1) cursor_x++;
+                        break;
+                    case 'D': // 左
+                        if (cursor_x > 0) cursor_x--;
+                        break;
+                }
+                break;
+            default: // 普通字符
+                if (c >= 32 && c <= 126) {
+                    // 实现字符插入
+                    modified = 1;
+                }
+                break;
+        }
+        
+        // 调整偏移
+        if (cursor_y < offset) {
+            offset = cursor_y;
+        } else if (cursor_y >= offset + NANO_ROWS) {
+            offset = cursor_y - NANO_ROWS + 1;
+        }
+    }
+}
+
 }
 
 // Shell
