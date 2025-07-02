@@ -225,7 +225,7 @@ void read_sectors(uint32_t lba, uint16_t count, void* buffer) {
     );
 }
 
-// 写入磁盘扇区 (64位版本)
+// 写入磁盘扇区
 void write_sectors(uint32_t lba, uint16_t count, const void* buffer) {
     asm volatile (
         "mov %0, %%rdi \n"
@@ -532,7 +532,7 @@ void shell() {
     char input[MAX_CMD_LEN + 1];
     uint64_t pos = 0;
     
-    puts("TOS Shell - Type 'help' for commands", COLOR_LGREEN, COLOR_BLACK);
+    puts("TOS (C) 2025 Tongshun - Type 'help' for commands", COLOR_LGREEN, COLOR_BLACK);
     
     while (1) {
         puts(current_prompt, COLOR_YELLOW, COLOR_BLACK);
