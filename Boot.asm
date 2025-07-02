@@ -60,7 +60,7 @@ print:
     ret
 
 ; 数据区
-loading_msg db "Loading kernel...", 0
+loading_msg db "TOS boot loader (C) 2025 Tongshun. Booting TOS...", 0
 disk_error_msg db "Disk error!", 0
 
 lba_packet:
