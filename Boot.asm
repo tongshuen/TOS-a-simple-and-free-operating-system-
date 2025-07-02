@@ -1,3 +1,4 @@
+;Boot.asm - TOS 的引导器
 [bits 16]
 [org 0x7C00]
 
